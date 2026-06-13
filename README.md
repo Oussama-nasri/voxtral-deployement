@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="banner.png" alt="Voxtral Banner" width="100%">
+</p>
+
 # Voxtral Mini 4B Realtime — Dockerized Deployment
 
 ## What is Voxtral Mini 4B Realtime?
