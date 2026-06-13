@@ -1,0 +1,144 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# Voxtral Mini 4B Realtime — Full Stack Compose
+# Services:
+#   voxtral-server  → vLLM inference engine (GPU, port 8000)
+#   voxtral-gateway → FastAPI REST/WS proxy  (CPU, port 7860)
+#
+# Prerequisites on the A4000 host:
+#   - Docker Engine ≥ 24 with nvidia-container-toolkit installed
+#   - NVIDIA driver ≥ 525
+#   - HuggingFace token with Mistral model access (set HF_TOKEN in .env)
+#
+# Quick start:
+#   cp .env.example .env        # then fill in HF_TOKEN
+#   docker compose up -d
+#   docker compose logs -f voxtral-server   # watch model load
+# ═════════════════════════════════════════════════════════════════════════════
+
+name: voxtral
+
+services:
+
+  # ── vLLM Inference Server ──────────────────────────────────────────────────
+  voxtral-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    image: voxtral-server:latest
+    container_name: voxtral-server
+
+    # GPU access — expose the RTX A4000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    environment:
+      # HuggingFace credentials (required to download Mistral gated model)
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
+      - HF_TOKEN=${HF_TOKEN}
+      - HF_HOME=/models/huggingface
+      - TRANSFORMERS_CACHE=/models/huggingface
+
+      # vLLM compile tuning
+      - VLLM_DISABLE_COMPILE_CACHE=1
+      - CUDA_VISIBLE_DEVICES=0
+
+      # Optional: set to 1 to skip CUDA graph capture (slower but less VRAM)
+      # - VLLM_USE_V1=0
+
+    volumes:
+      # Persist downloaded model weights across container restarts
+      - voxtral-models:/models
+
+    ports:
+      # Expose vLLM directly (useful for debugging; remove in production)
+      - "8000:8000"
+
+    networks:
+      - voxtral-net
+
+    restart: unless-stopped
+
+    # vLLM model loading takes 2-5 minutes on first run; health check is lenient
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s    # 5 min grace for model download + load
+      retries: 5
+
+    # Increase shared memory for CUDA IPC
+    shm_size: "4gb"
+
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      stack:
+        soft: 67108864
+        hard: 67108864
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+
+  # ── FastAPI Gateway ────────────────────────────────────────────────────────
+  voxtral-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    image: voxtral-gateway:latest
+    container_name: voxtral-gateway
+
+    environment:
+      - VLLM_HOST=voxtral-server
+      - VLLM_PORT=8000
+      - MODEL_ID=mistralai/Voxtral-Mini-4B-Realtime-2602
+
+    ports:
+      - "7860:7860"
+
+    networks:
+      - voxtral-net
+
+    depends_on:
+      voxtral-server:
+        condition: service_healthy
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+
+# ── Shared Resources ──────────────────────────────────────────────────────────
+
+volumes:
+  voxtral-models:
+    driver: local
+    # Optional: bind-mount to a specific path on the host for easy access
+    # driver_opts:
+    #   type: none
+    #   o: bind
+    #   device: /mnt/nvme/voxtral-models
+
+networks:
+  voxtral-net:
+    driver: bridge

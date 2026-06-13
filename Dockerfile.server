@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Voxtral Mini 4B Realtime — vLLM Server Image
+# Base: official vLLM nightly image (CUDA 12.4, Python 3.11)
+# Target GPU: NVIDIA RTX A4000 (Ampere, sm_86, 16 GB VRAM)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM vllm/vllm-openai:nightly
+
+# --- System deps ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        sox \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Python audio deps required by Voxtral ---
+RUN uv pip install --system --no-cache \
+        soxr \
+        librosa \
+        soundfile \
+        "mistral-common>=1.9.0" \
+        "transformers>=5.2.0"
+
+# --- Model download cache directory ---
+ENV HF_HOME=/models/huggingface
+ENV TRANSFORMERS_CACHE=/models/huggingface
+VOLUME ["/models"]
+
+# --- vLLM tuning for A4000 (16 GB, Ampere sm_86) ---
+# PIECEWISE cudagraph avoids the large static capture overhead on 16GB cards
+ENV VLLM_DISABLE_COMPILE_CACHE=1
+ENV CUDA_VISIBLE_DEVICES=0
+
+EXPOSE 8000
+
+# --- Entrypoint ---
+# Key flags:
+#   --compilation_config PIECEWISE  → safer on 16GB
+#   --max-model-len 45000           → ~1h of audio (adjust as needed)
+#   --gpu-memory-utilization 0.90   → leave 1.6 GB headroom
+#   --dtype bfloat16                → matches model weights
+#   --disable-log-requests          → cleaner logs in prod
+ENTRYPOINT ["python", "-m", "vllm.entrypoints.openai.api_server"]
+CMD [ \
+    "--model",                   "mistralai/Voxtral-Mini-4B-Realtime-2602", \
+    "--dtype",                   "bfloat16", \
+    "--max-model-len",           "45000", \
+    "--gpu-memory-utilization",  "0.90", \
+    "--compilation_config",      "{\"cudagraph_mode\": \"PIECEWISE\"}", \
+    "--host",                    "0.0.0.0", \
+    "--port",                    "8000" \
+]

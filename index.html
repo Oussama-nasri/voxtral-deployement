@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>VOXTRAL // REALTIME TRANSCRIPTION</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow:wght@300;400;600&family=Barlow+Condensed:wght@700;900&display=swap" rel="stylesheet"/>
+<style>
+/* ── CSS Variables ───────────────────────────────────────────── */
+:root {
+  --bg:        #080a0d;
+  --bg2:       #0e1117;
+  --bg3:       #13181f;
+  --line:      #1c2530;
+  --accent:    #00e5ff;
+  --accent2:   #ff6b35;
+  --success:   #39ff14;
+  --warn:      #ffd600;
+  --text:      #c8d8e8;
+  --text-dim:  #4a6080;
+  --text-mid:  #7a98b8;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-body: 'Barlow', sans-serif;
+  --font-head: 'Barlow Condensed', sans-serif;
+  --glow:      0 0 20px rgba(0,229,255,0.25);
+  --glow-r:    0 0 20px rgba(255,107,53,0.3);
+}
+
+/* ── Reset ───────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 300;
+  min-height: 100vh;
+  overflow-x: hidden;
+  cursor: crosshair;
+}
+
+/* ── Scan-line overlay ───────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.07) 2px,
+    rgba(0,0,0,0.07) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Noise grain ─────────────────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9998;
+  opacity: 0.35;
+  animation: grain 0.5s steps(1) infinite;
+}
+@keyframes grain {
+  0%,100% { transform: translate(0,0); }
+  10%  { transform: translate(-2%,-3%); }
+  20%  { transform: translate(3%,2%); }
+  30%  { transform: translate(-1%,4%); }
+  40%  { transform: translate(4%,-1%); }
+  50%  { transform: translate(-3%,3%); }
+  60%  { transform: translate(2%,-4%); }
+  70%  { transform: translate(-4%,1%); }
+  80%  { transform: translate(1%,-2%); }
+  90%  { transform: translate(-2%,4%); }
+}
+
+/* ── Layout ──────────────────────────────────────────────────── */
+.shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+header {
+  border-bottom: 1px solid var(--line);
+  padding: 20px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  animation: fadeDown 0.6s ease both;
+}
+.logo-block { display: flex; align-items: baseline; gap: 12px; }
+.logo-text {
+  font-family: var(--font-head);
+  font-weight: 900;
+  font-size: 2rem;
+  letter-spacing: 0.12em;
+  color: #fff;
+  text-shadow: 0 0 30px rgba(0,229,255,0.4);
+}
+.logo-text span { color: var(--accent); }
+.logo-sub {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  letter-spacing: 0.15em;
+}
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.status-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.3s, box-shadow 0.3s;
+}
+.status-dot.online  { background: var(--success); box-shadow: 0 0 10px var(--success); }
+.status-dot.offline { background: #ff3333; box-shadow: 0 0 10px #ff3333; }
+.status-dot.pending { background: var(--warn);   box-shadow: 0 0 10px var(--warn); animation: blink 1s step-end infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ── Main Grid ───────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  grid-template-rows: auto auto 1fr;
+  gap: 16px;
+  padding: 20px 0 40px;
+  min-height: calc(100vh - 80px);
+}
+
+/* ── Panel Base ──────────────────────────────────────────────── */
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  position: relative;
+  overflow: hidden;
+}
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.4;
+}
+.panel-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.2em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-label .tag {
+  background: var(--line);
+  color: var(--accent);
+  padding: 2px 8px;
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+}
+
+/* ── Waveform Panel ──────────────────────────────────────────── */
+.waveform-panel {
+  grid-column: 1;
+  grid-row: 1;
+  animation: fadeUp 0.7s 0.1s ease both;
+}
+.waveform-wrap {
+  padding: 16px;
+  position: relative;
+}
+#waveCanvas {
+  width: 100%;
+  height: 80px;
+  display: block;
+}
+.waveform-overlay {
+  position: absolute;
+  inset: 16px;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, var(--bg2) 0%, transparent 60px),
+    linear-gradient(270deg, var(--bg2) 0%, transparent 60px);
+}
+
+/* ── Controls Panel ──────────────────────────────────────────── */
+.controls-panel {
+  grid-column: 1;
+  grid-row: 2;
+  animation: fadeUp 0.7s 0.2s ease both;
+}
+.controls-inner {
+  padding: 16px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+.btn {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 10px 20px;
+  border: 1px solid;
+  background: transparent;
+  cursor: crosshair;
+  transition: all 0.15s;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.btn:hover::after { opacity: 0.08; }
+.btn:active::after { opacity: 0.15; }
+
+.btn-mic {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.btn-mic.recording {
+  color: var(--accent2);
+  border-color: var(--accent2);
+  box-shadow: var(--glow-r);
+  animation: pulse-border 1.2s ease-in-out infinite;
+}
+@keyframes pulse-border {
+  0%,100% { box-shadow: 0 0 8px rgba(255,107,53,0.3); }
+  50%      { box-shadow: 0 0 24px rgba(255,107,53,0.7); }
+}
+
+.btn-upload {
+  color: var(--text-mid);
+  border-color: var(--line);
+}
+.btn-upload:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn-clear {
+  color: var(--text-dim);
+  border-color: var(--line);
+}
+.btn-clear:hover {
+  color: #ff3333;
+  border-color: #ff3333;
+}
+
+.btn-copy {
+  color: var(--text-dim);
+  border-color: var(--line);
+}
+.btn-copy.copied {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.mic-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 8px;
+  transition: background 0.3s;
+}
+.recording .mic-dot {
+  background: var(--accent2);
+  animation: blink 0.5s step-end infinite;
+}
+
+/* File input hidden */
+#fileInput { display: none; }
+
+/* Delay control */
+.delay-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.delay-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.delay-val {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--accent);
+  min-width: 52px;
+  text-align: right;
+}
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100px;
+  height: 2px;
+  background: var(--line);
+  cursor: crosshair;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  cursor: crosshair;
+}
+
+/* ── Transcript Panel ────────────────────────────────────────── */
+.transcript-panel {
+  grid-column: 1;
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+  animation: fadeUp 0.7s 0.3s ease both;
+}
+#transcriptOut {
+  flex: 1;
+  padding: 20px;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.8;
+  color: var(--text);
+  overflow-y: auto;
+  min-height: 260px;
+  max-height: 440px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+#transcriptOut::-webkit-scrollbar { width: 4px; }
+#transcriptOut::-webkit-scrollbar-thumb { background: var(--line); }
+#transcriptOut:empty::before {
+  content: '_ awaiting input...';
+  color: var(--text-dim);
+  animation: blink 1.2s step-end infinite;
+}
+.transcript-segment {
+  display: block;
+  padding: 4px 0;
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+  margin-bottom: 4px;
+}
+.transcript-segment.final {
+  border-left-color: var(--accent);
+  color: #fff;
+}
+.transcript-segment.delta {
+  border-left-color: var(--accent2);
+  color: var(--text-mid);
+  font-style: italic;
+}
+.transcript-ts {
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  margin-right: 10px;
+}
+
+/* ── Right Sidebar ───────────────────────────────────────────── */
+.sidebar {
+  grid-column: 2;
+  grid-row: 1 / 4;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  animation: fadeLeft 0.7s 0.15s ease both;
+}
+
+/* ── Stats Panel ─────────────────────────────────────────────── */
+.stats-panel {}
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+}
+.stat-cell {
+  background: var(--bg2);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stat-name {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.stat-val {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  color: var(--accent);
+  font-weight: 400;
+}
+.stat-val.orange { color: var(--accent2); }
+.stat-val.green  { color: var(--success); }
+
+/* ── Meter Bar ───────────────────────────────────────────────── */
+.meter-panel {}
+.meter-wrap { padding: 14px 16px; }
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.meter-row:last-child { margin-bottom: 0; }
+.meter-name {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  width: 56px;
+  flex-shrink: 0;
+}
+.meter-bar-bg {
+  flex: 1;
+  height: 4px;
+  background: var(--line);
+  position: relative;
+  overflow: hidden;
+}
+.meter-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  transition: width 0.2s;
+  position: relative;
+}
+.meter-bar-fill::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 12px;
+  background: linear-gradient(90deg, transparent, white);
+  opacity: 0.5;
+}
+.meter-bar-fill.orange { background: var(--accent2); }
+.meter-num {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-dim);
+  width: 36px;
+  text-align: right;
+}
+
+/* ── Log Panel ───────────────────────────────────────────────── */
+.log-panel { flex: 1; display: flex; flex-direction: column; }
+#logOut {
+  flex: 1;
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.7;
+  color: var(--text-dim);
+  overflow-y: auto;
+  min-height: 160px;
+  max-height: 260px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+#logOut::-webkit-scrollbar { width: 3px; }
+#logOut::-webkit-scrollbar-thumb { background: var(--line); }
+.log-entry { display: block; }
+.log-entry.info  { color: var(--text-dim); }
+.log-entry.ok    { color: var(--success); }
+.log-entry.warn  { color: var(--warn); }
+.log-entry.error { color: #ff4444; }
+.log-entry.acnt  { color: var(--accent); }
+.log-time { color: var(--text-dim); margin-right: 8px; opacity: 0.6; }
+
+/* ── Server Config Panel ─────────────────────────────────────── */
+.config-panel {}
+.config-inner { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.config-row { display: flex; align-items: center; gap: 8px; }
+.config-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  width: 52px;
+  flex-shrink: 0;
+}
+.config-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.config-input:focus { border-color: var(--accent); }
+.btn-connect {
+  width: 100%;
+  margin-top: 4px;
+  color: var(--accent);
+  border-color: var(--accent);
+  padding: 9px;
+  font-size: 0.72rem;
+}
+.btn-connect:hover { box-shadow: var(--glow); }
+.btn-connect.connected {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+/* ── Progress overlay for file upload ───────────────────────── */
+.progress-wrap {
+  display: none;
+  padding: 4px 16px 10px;
+}
+.progress-wrap.active { display: block; }
+.progress-bar-bg {
+  height: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  width: 0%;
+  transition: width 0.3s;
+}
+.progress-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes fadeUp   { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:none} }
+@keyframes fadeDown { from{opacity:0;transform:translateY(-10px)} to{opacity:1;transform:none} }
+@keyframes fadeLeft { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+/* ── Footer ──────────────────────────────────────────────────── */
+footer {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  letter-spacing: 0.1em;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; grid-template-rows: auto; }
+  .sidebar { grid-column: 1; grid-row: auto; flex-direction: row; flex-wrap: wrap; }
+  .stats-panel, .meter-panel, .config-panel { flex: 1; min-width: 240px; }
+  .log-panel { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header>
+  <div class="logo-block">
+    <div class="logo-text">VOX<span>TRL</span></div>
+    <div class="logo-sub">MINI-4B // REALTIME ASR // mistral.ai</div>
+  </div>
+  <div class="header-status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">OFFLINE</span>
+  </div>
+</header>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Waveform -->
+  <div class="panel waveform-panel">
+    <div class="panel-label">
+      AUDIO INPUT
+      <span class="tag" id="modeTag">IDLE</span>
+    </div>
+    <div class="waveform-wrap">
+      <canvas id="waveCanvas" height="80"></canvas>
+      <div class="waveform-overlay"></div>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="panel controls-panel">
+    <div class="panel-label">CONTROLS</div>
+    <div class="controls-inner">
+      <button class="btn btn-mic" id="micBtn" onclick="toggleMic()">
+        <span class="mic-dot"></span>LIVE MIC
+      </button>
+      <button class="btn btn-upload" onclick="document.getElementById('fileInput').click()">
+        ▲ UPLOAD FILE
+      </button>
+      <input type="file" id="fileInput" accept="audio/*,video/*" onchange="handleFileUpload(event)"/>
+      <button class="btn btn-clear" onclick="clearTranscript()">⊘ CLEAR</button>
+      <button class="btn btn-copy" id="copyBtn" onclick="copyTranscript()">⎘ COPY</button>
+
+      <div class="delay-control">
+        <span class="delay-label">DELAY</span>
+        <input type="range" id="delaySlider" min="0" max="5" step="1" value="3"
+               oninput="updateDelay(this.value)"/>
+        <span class="delay-val" id="delayVal">480ms</span>
+      </div>
+    </div>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-label" id="progressLabel">Uploading...</div>
+    </div>
+  </div>
+
+  <!-- Transcript -->
+  <div class="panel transcript-panel">
+    <div class="panel-label">
+      TRANSCRIPT OUTPUT
+      <span class="tag" id="wordCount">0 WORDS</span>
+    </div>
+    <div id="transcriptOut"></div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <!-- Server Config -->
+    <div class="panel config-panel">
+      <div class="panel-label">SERVER CONFIG</div>
+      <div class="config-inner">
+        <div class="config-row">
+          <span class="config-label">HOST</span>
+          <input class="config-input" id="cfgHost" value="localhost" placeholder="localhost"/>
+        </div>
+        <div class="config-row">
+          <span class="config-label">PORT</span>
+          <input class="config-input" id="cfgPort" value="7860" placeholder="7860"/>
+        </div>
+        <button class="btn btn-connect" id="connectBtn" onclick="pingServer()">
+          ◈ TEST CONNECTION
+        </button>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="panel stats-panel">
+      <div class="panel-label">SESSION STATS</div>
+      <div class="stats-grid">
+        <div class="stat-cell">
+          <span class="stat-name">WORDS</span>
+          <span class="stat-val" id="statWords">0</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-name">DURATION</span>
+          <span class="stat-val orange" id="statDur">0s</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-name">SEGMENTS</span>
+          <span class="stat-val" id="statSegs">0</span>
+        </div>
+        <div class="stat-cell">
+          <span class="stat-name">LATENCY</span>
+          <span class="stat-val green" id="statLat">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meters -->
+    <div class="panel meter-panel">
+      <div class="panel-label">LEVELS</div>
+      <div class="meter-wrap">
+        <div class="meter-row">
+          <span class="meter-name">INPUT</span>
+          <div class="meter-bar-bg"><div class="meter-bar-fill" id="meterInput"></div></div>
+          <span class="meter-num" id="meterInputNum">0%</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-name">SIGNAL</span>
+          <div class="meter-bar-bg"><div class="meter-bar-fill orange" id="meterSignal"></div></div>
+          <span class="meter-num" id="meterSignalNum">0%</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-name">WS SEND</span>
+          <div class="meter-bar-bg"><div class="meter-bar-fill" id="meterWs"></div></div>
+          <span class="meter-num" id="meterWsNum">0%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="panel log-panel">
+      <div class="panel-label">SYSTEM LOG</div>
+      <div id="logOut"></div>
+    </div>
+
+  </div><!-- /sidebar -->
+</main>
+
+<footer class="shell">
+  <span>VOXTRAL-MINI-4B-REALTIME-2602 // APACHE-2.0</span>
+  <span id="footerClock"></span>
+</footer>
+
+</div><!-- /shell -->
+
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// VOXTRAL FRONTEND — core JS
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Config ─────────────────────────────────────────────────────────
+let HOST = () => document.getElementById('cfgHost').value.trim() || 'localhost';
+let PORT = () => document.getElementById('cfgPort').value.trim() || '7860';
+let GW   = () => `http://${HOST()}:${PORT()}`;
+let WS_  = () => `ws://${HOST()}:${PORT()}/ws/stream`;
+
+const DELAY_MAP = [160, 240, 480, 480, 960, 2400];  // slider 0-5
+let currentDelay = 480;
+
+// ── State ──────────────────────────────────────────────────────────
+let micActive    = false;
+let wsConn       = null;
+let audioCtx     = null;
+let analyser     = null;
+let mediaStream  = null;
+let scriptNode   = null;
+let sessionStart = null;
+let sessionTimer = null;
+let wordTotal    = 0;
+let segTotal     = 0;
+let pendingDelta = '';
+let deltaSpan    = null;
+let wsSendRate   = 0;   // bytes sent per second
+let wsSendAccum  = 0;
+let lastWsSend   = Date.now();
+
+// ── Waveform ───────────────────────────────────────────────────────
+const canvas  = document.getElementById('waveCanvas');
+const ctx2d   = canvas.getContext('2d');
+const BARS    = 64;
+const BAR_W   = 4;
+const GAP     = 3;
+let   waveData = new Float32Array(BARS).fill(0);
+let   waveRaf;
+
+function resizeCanvas() {
+  canvas.width  = canvas.offsetWidth  * devicePixelRatio;
+  canvas.height = canvas.offsetHeight * devicePixelRatio;
+  ctx2d.scale(devicePixelRatio, devicePixelRatio);
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+function drawWave() {
+  const W = canvas.offsetWidth;
+  const H = canvas.offsetHeight;
+  ctx2d.clearRect(0, 0, W, H);
+
+  const totalW = BARS * (BAR_W + GAP) - GAP;
+  const startX = (W - totalW) / 2;
+
+  for (let i = 0; i < BARS; i++) {
+    const v = waveData[i];
+    const barH = Math.max(2, v * H * 0.9);
+    const x = startX + i * (BAR_W + GAP);
+    const y = (H - barH) / 2;
+
+    // Color gradient: dim→accent based on level
+    const r = Math.floor(v * 80);
+    const g = Math.floor(130 + v * 125);
+    const b = Math.floor(200 + v * 55);
+    ctx2d.fillStyle = micActive
+      ? `rgba(255, ${Math.floor(107 + v*100)}, 53, ${0.4 + v * 0.6})`
+      : `rgba(${r}, ${g}, ${b}, ${0.3 + v * 0.7})`;
+
+    ctx2d.fillRect(x, y, BAR_W, barH);
+  }
+
+  // Decay all bars
+  for (let i = 0; i < BARS; i++) {
+    waveData[i] *= 0.85;
+  }
+
+  waveRaf = requestAnimationFrame(drawWave);
+}
+drawWave();
+
+function pushWaveData(floatArr) {
+  const step = Math.floor(floatArr.length / BARS);
+  for (let i = 0; i < BARS; i++) {
+    let sum = 0;
+    for (let j = 0; j < step; j++) sum += Math.abs(floatArr[i * step + j] || 0);
+    waveData[i] = Math.max(waveData[i], sum / step);
+  }
+}
+
+// ── Logger ─────────────────────────────────────────────────────────
+function log(msg, type = 'info') {
+  const el = document.getElementById('logOut');
+  const now = new Date().toTimeString().slice(0, 8);
+  const entry = document.createElement('span');
+  entry.className = `log-entry ${type}`;
+  entry.innerHTML = `<span class="log-time">${now}</span>${msg}`;
+  el.appendChild(entry);
+  el.appendChild(document.createTextNode('\n'));
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── Status ─────────────────────────────────────────────────────────
+function setStatus(state) {
+  const dot  = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className  = `status-dot ${state}`;
+  text.textContent = { online:'ONLINE', offline:'OFFLINE', pending:'CONNECTING' }[state] || state.toUpperCase();
+}
+
+// ── Delay control ──────────────────────────────────────────────────
+function updateDelay(idx) {
+  currentDelay = DELAY_MAP[parseInt(idx)];
+  document.getElementById('delayVal').textContent = `${currentDelay}ms`;
+}
+
+// ── Server ping ────────────────────────────────────────────────────
+async function pingServer() {
+  const btn = document.getElementById('connectBtn');
+  setStatus('pending');
+  log(`Testing ${GW()}/health …`, 'info');
+  try {
+    const r = await fetch(`${GW()}/health`, { signal: AbortSignal.timeout(6000) });
+    const d = await r.json();
+    if (d.vllm_backend === 'ok') {
+      setStatus('online');
+      btn.textContent = '✓ CONNECTED';
+      btn.classList.add('connected');
+      log(`Gateway OK — vLLM backend READY`, 'ok');
+      log(`Model: ${d.model || 'Voxtral-Mini-4B'}`, 'acnt');
+    } else {
+      setStatus('pending');
+      btn.classList.remove('connected');
+      log(`Gateway OK but vLLM not ready yet`, 'warn');
+    }
+  } catch(e) {
+    setStatus('offline');
+    btn.classList.remove('connected');
+    log(`Connection failed: ${e.message}`, 'error');
+  }
+}
+
+// ── Transcript helpers ─────────────────────────────────────────────
+function ts() {
+  return `<span class="transcript-ts">${new Date().toTimeString().slice(0,8)}</span>`;
+}
+
+function appendFinal(text) {
+  if (!text.trim()) return;
+  // Remove any pending delta span
+  if (deltaSpan && deltaSpan.parentNode) deltaSpan.parentNode.removeChild(deltaSpan);
+  deltaSpan = null;
+  pendingDelta = '';
+
+  const out  = document.getElementById('transcriptOut');
+  const seg  = document.createElement('span');
+  seg.className = 'transcript-segment final';
+  seg.innerHTML = `${ts()}${escHtml(text)}`;
+  out.appendChild(seg);
+  out.scrollTop = out.scrollHeight;
+
+  segTotal++;
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  wordTotal += words;
+  updateStats();
+}
+
+function appendDelta(text) {
+  const out = document.getElementById('transcriptOut');
+  if (!deltaSpan) {
+    deltaSpan = document.createElement('span');
+    deltaSpan.className = 'transcript-segment delta';
+    out.appendChild(deltaSpan);
+  }
+  pendingDelta += text;
+  deltaSpan.innerHTML = `${ts()}${escHtml(pendingDelta)}`;
+  out.scrollTop = out.scrollHeight;
+  updateWordCount(pendingDelta);
+}
+
+function updateWordCount(extra = '') {
+  const total = wordTotal + extra.trim().split(/\s+/).filter(Boolean).length;
+  document.getElementById('wordCount').textContent = `${total} WORDS`;
+}
+
+function clearTranscript() {
+  document.getElementById('transcriptOut').innerHTML = '';
+  deltaSpan = null; pendingDelta = '';
+  wordTotal = 0; segTotal = 0;
+  updateStats();
+  log('Transcript cleared', 'warn');
+}
+
+function copyTranscript() {
+  const text = document.getElementById('transcriptOut').innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = '✓ COPIED';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '⎘ COPY'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Stats ──────────────────────────────────────────────────────────
+function updateStats() {
+  document.getElementById('statWords').textContent = wordTotal;
+  document.getElementById('statSegs').textContent  = segTotal;
+  document.getElementById('wordCount').textContent = `${wordTotal} WORDS`;
+}
+
+function startTimer() {
+  sessionStart = Date.now();
+  sessionTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - sessionStart) / 1000);
+    const m = Math.floor(s / 60);
+    const ss = s % 60;
+    document.getElementById('statDur').textContent =
+      m > 0 ? `${m}m${ss.toString().padStart(2,'0')}s` : `${s}s`;
+  }, 1000);
+}
+function stopTimer() {
+  clearInterval(sessionTimer);
+}
+
+// ── WS send rate meter ─────────────────────────────────────────────
+function trackWsSend(bytes) {
+  wsSendAccum += bytes;
+  const now = Date.now();
+  if (now - lastWsSend > 500) {
+    const kbps = (wsSendAccum / 1024) / ((now - lastWsSend) / 1000);
+    wsSendRate  = Math.min(kbps / 20, 1);  // scale: 20KB/s = 100%
+    wsSendAccum = 0;
+    lastWsSend  = now;
+    const pct = Math.round(wsSendRate * 100);
+    document.getElementById('meterWs').style.width     = pct + '%';
+    document.getElementById('meterWsNum').textContent  = pct + '%';
+  }
+}
+
+// ── Microphone → WebSocket streaming ──────────────────────────────
+async function toggleMic() {
+  if (micActive) { stopMic(); return; }
+
+  log('Requesting microphone access…', 'info');
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true }
+    });
+  } catch(e) {
+    log(`Mic error: ${e.message}`, 'error');
+    return;
+  }
+
+  // Open WebSocket
+  log(`Connecting WS → ${WS_()}`, 'info');
+  wsConn = new WebSocket(WS_());
+  wsConn.binaryType = 'arraybuffer';
+
+  wsConn.onopen = () => {
+    log('WS open — streaming audio', 'ok');
+    setMicActive(true);
+    startTimer();
+  };
+  wsConn.onmessage = (ev) => {
+    const event = JSON.parse(ev.data);
+    if (event.type === 'delta')     appendDelta(event.text);
+    if (event.type === 'completed') {
+      appendFinal(event.text);
+      const latMs = Date.now() - (window._lastChunkTime || Date.now());
+      document.getElementById('statLat').textContent = `${latMs}ms`;
+    }
+    if (event.type === 'error') log(`Server: ${event.detail}`, 'error');
+  };
+  wsConn.onerror = () => log('WebSocket error', 'error');
+  wsConn.onclose = () => {
+    log('WS closed', 'warn');
+    if (micActive) stopMic();
+  };
+
+  // Audio processing
+  audioCtx = new AudioContext({ sampleRate: 16000 });
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  analyser     = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  scriptNode   = audioCtx.createScriptProcessor(4096, 1, 1);
+
+  const floatBuf = new Float32Array(analyser.fftSize);
+
+  scriptNode.onaudioprocess = (ev) => {
+    const input = ev.inputBuffer.getChannelData(0);
+    analyser.getFloatTimeDomainData(floatBuf);
+    pushWaveData(floatBuf);
+
+    // Level meters
+    let rms = 0;
+    for (let i = 0; i < input.length; i++) rms += input[i] * input[i];
+    rms = Math.sqrt(rms / input.length);
+    const pct = Math.min(Math.round(rms * 800), 100);
+    document.getElementById('meterInput').style.width    = pct + '%';
+    document.getElementById('meterInputNum').textContent = pct + '%';
+    document.getElementById('meterSignal').style.width   = Math.min(pct * 1.2, 100) + '%';
+    document.getElementById('meterSignalNum').textContent= Math.min(pct * 1.2, 100).toFixed(0) + '%';
+
+    // Convert float32 → int16 PCM and send
+    if (wsConn && wsConn.readyState === WebSocket.OPEN) {
+      const pcm = new Int16Array(input.length);
+      for (let i = 0; i < input.length; i++) {
+        pcm[i] = Math.max(-32768, Math.min(32767, input[i] * 32767));
+      }
+      window._lastChunkTime = Date.now();
+      wsConn.send(pcm.buffer);
+      trackWsSend(pcm.buffer.byteLength);
+    }
+  };
+
+  source.connect(analyser);
+  source.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination);
+}
+
+function stopMic() {
+  log('Stopping microphone', 'info');
+  setMicActive(false);
+  stopTimer();
+  if (scriptNode)  { scriptNode.disconnect(); scriptNode = null; }
+  if (analyser)    { analyser.disconnect();   analyser   = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (audioCtx)    { audioCtx.close();        audioCtx   = null; }
+  if (wsConn)      { wsConn.close();          wsConn     = null; }
+  resetMeters();
+  log('Mic session ended', 'ok');
+}
+
+function setMicActive(v) {
+  micActive = v;
+  const btn = document.getElementById('micBtn');
+  const tag = document.getElementById('modeTag');
+  if (v) {
+    btn.classList.add('recording');
+    btn.innerHTML = '<span class="mic-dot"></span>STOP REC';
+    tag.textContent = 'LIVE MIC';
+  } else {
+    btn.classList.remove('recording');
+    btn.innerHTML = '<span class="mic-dot"></span>LIVE MIC';
+    tag.textContent = 'IDLE';
+  }
+}
+
+function resetMeters() {
+  ['meterInput','meterSignal','meterWs'].forEach(id => {
+    document.getElementById(id).style.width = '0%';
+  });
+  ['meterInputNum','meterSignalNum','meterWsNum'].forEach(id => {
+    document.getElementById(id).textContent = '0%';
+  });
+}
+
+// ── File Upload → REST /transcribe ────────────────────────────────
+async function handleFileUpload(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+
+  const tag  = document.getElementById('modeTag');
+  const prog = document.getElementById('progressWrap');
+  const fill = document.getElementById('progressFill');
+  const plbl = document.getElementById('progressLabel');
+
+  tag.textContent = 'FILE';
+  prog.classList.add('active');
+  fill.style.width = '0%';
+  plbl.textContent = `Loading ${file.name} (${(file.size/1024).toFixed(0)} KB)…`;
+  log(`File selected: ${file.name}`, 'acnt');
+
+  // Animate progress (indeterminate during upload)
+  let fake = 0;
+  const fakeIntvl = setInterval(() => {
+    fake = Math.min(fake + Math.random() * 8, 88);
+    fill.style.width = fake + '%';
+  }, 200);
+
+  const form = new FormData();
+  form.append('file', file);
+
+  const t0 = Date.now();
+  try {
+    plbl.textContent = `Uploading & transcribing…`;
+    log(`POST ${GW()}/transcribe`, 'info');
+
+    const r = await fetch(`${GW()}/transcribe`, { method: 'POST', body: form });
+    clearInterval(fakeIntvl);
+
+    if (!r.ok) {
+      const err = await r.text();
+      throw new Error(`HTTP ${r.status}: ${err}`);
+    }
+
+    fill.style.width = '100%';
+    const data = await r.json();
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+
+    plbl.textContent = `Done — ${data.duration_seconds}s audio in ${elapsed}s`;
+    log(`Transcript received (${data.duration_seconds}s audio, RTF ${(data.processing_time_seconds/data.duration_seconds).toFixed(2)}x)`, 'ok');
+    document.getElementById('statLat').textContent = `${Math.round(data.processing_time_seconds * 1000)}ms`;
+
+    appendFinal(data.transcript || '[empty]');
+
+  } catch(e) {
+    clearInterval(fakeIntvl);
+    fill.style.background = '#ff4444';
+    plbl.textContent = `Error: ${e.message}`;
+    log(`Upload error: ${e.message}`, 'error');
+  }
+
+  setTimeout(() => {
+    prog.classList.remove('active');
+    fill.style.width = '0%';
+    fill.style.background = '';
+    tag.textContent = 'IDLE';
+  }, 3000);
+
+  // Reset file input
+  ev.target.value = '';
+}
+
+// ── Clock ──────────────────────────────────────────────────────────
+function updateClock() {
+  document.getElementById('footerClock').textContent =
+    new Date().toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ── Boot sequence ─────────────────────────────────────────────────
+(async function boot() {
+  log('VOXTRAL FRONTEND v1.0 INIT', 'acnt');
+  log('Checking gateway…', 'info');
+  await new Promise(r => setTimeout(r, 400));
+  await pingServer();
+  log('Ready. Use MIC or FILE UPLOAD to begin.', 'ok');
+})();
+</script>
+</body>
+</html>
