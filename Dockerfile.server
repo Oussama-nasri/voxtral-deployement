@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Voxtral Mini 4B Realtime — vLLM Server Image
-# Base: official vLLM nightly image (CUDA 12.4, Python 3.11)
-# Target GPU: NVIDIA RTX A4000 (Ampere, sm_86, 16 GB VRAM)
+# Base: official vLLM nightly (CUDA 12.4, uses `vllm serve` entrypoint)
+# Target GPU: NVIDIA RTX A4000 (Ampere sm_86, 16 GB VRAM)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM vllm/vllm-openai:nightly
 
@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Python audio deps required by Voxtral ---
+# --- Find the real Python binary and install audio deps ---
+# The nightly image uses uv-managed Python; we must pass --system so uv
+# installs into the system site-packages rather than requiring a venv.
+# We also ensure pip is available as a fallback.
 RUN uv pip install --system --no-cache \
         soxr \
         librosa \
@@ -21,31 +24,32 @@ RUN uv pip install --system --no-cache \
         "mistral-common>=1.9.0" \
         "transformers>=5.2.0"
 
-# --- Model download cache directory ---
+# --- Model cache ---
 ENV HF_HOME=/models/huggingface
 ENV TRANSFORMERS_CACHE=/models/huggingface
 VOLUME ["/models"]
 
-# --- vLLM tuning for A4000 (16 GB, Ampere sm_86) ---
-# PIECEWISE cudagraph avoids the large static capture overhead on 16GB cards
+# --- A4000 tuning ---
 ENV VLLM_DISABLE_COMPILE_CACHE=1
 ENV CUDA_VISIBLE_DEVICES=0
 
 EXPOSE 8000
 
-# --- Entrypoint ---
-# Key flags:
-#   --compilation_config PIECEWISE  → safer on 16GB
-#   --max-model-len 45000           → ~1h of audio (adjust as needed)
-#   --gpu-memory-utilization 0.90   → leave 1.6 GB headroom
-#   --dtype bfloat16                → matches model weights
-#   --disable-log-requests          → cleaner logs in prod
-ENTRYPOINT ["python", "-m", "vllm.entrypoints.openai.api_server"]
+# ─── Entrypoint ───────────────────────────────────────────────────────────────
+# The vllm/vllm-openai nightly image ships with:
+#   ENTRYPOINT ["vllm", "serve"]
+# We do NOT override ENTRYPOINT — we only provide CMD arguments.
+#
+# Flags tuned for A4000 (16 GB):
+#   --max-model-len 45000           → ~1h audio; reduces RoPE pre-alloc vs 131k default
+#   --gpu-memory-utilization 0.90   → leaves ~1.6 GB headroom
+#   --dtype bfloat16                → matches Voxtral weights
+#   cudagraph_mode PIECEWISE        → avoids OOM from full static capture on 16GB
 CMD [ \
-    "--model",                   "mistralai/Voxtral-Mini-4B-Realtime-2602", \
+    "mistralai/Voxtral-Mini-4B-Realtime-2602", \
     "--dtype",                   "bfloat16", \
-    "--max-model-len",           "45000", \
-    "--gpu-memory-utilization",  "0.90", \
+    "--max-model-len",           "20000", \
+    "--gpu-memory-utilization",  "0.80", \
     "--compilation_config",      "{\"cudagraph_mode\": \"PIECEWISE\"}", \
     "--host",                    "0.0.0.0", \
     "--port",                    "8000" \

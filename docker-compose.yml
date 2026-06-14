@@ -1,25 +1,7 @@
-# ═════════════════════════════════════════════════════════════════════════════
-# Voxtral Mini 4B Realtime — Full Stack Compose
-# Services:
-#   voxtral-server  → vLLM inference engine (GPU, port 8000)
-#   voxtral-gateway → FastAPI REST/WS proxy  (CPU, port 7860)
-#
-# Prerequisites on the A4000 host:
-#   - Docker Engine ≥ 24 with nvidia-container-toolkit installed
-#   - NVIDIA driver ≥ 525
-#   - HuggingFace token with Mistral model access (set HF_TOKEN in .env)
-#
-# Quick start:
-#   cp .env.example .env        # then fill in HF_TOKEN
-#   docker compose up -d
-#   docker compose logs -f voxtral-server   # watch model load
-# ═════════════════════════════════════════════════════════════════════════════
-
 name: voxtral
 
 services:
 
-  # ── vLLM Inference Server ──────────────────────────────────────────────────
   voxtral-server:
     build:
       context: .
@@ -27,7 +9,6 @@ services:
     image: voxtral-server:latest
     container_name: voxtral-server
 
-    # GPU access — expose the RTX A4000
     deploy:
       resources:
         reservations:
@@ -36,26 +17,37 @@ services:
               count: 1
               capabilities: [gpu]
 
+    # --tokenizer-mode mistral  REQUIRED — Voxtral only loads via mistral_common
+    # --config-format mistral   REQUIRED — loads mistral config format
+    # --load-format mistral     REQUIRED — loads mistral weight format
+    # --enforce-eager           saves 300-500MB VRAM by skipping CUDA graph capture
+    # --max-model-len 4096      minimal KV cache to fit on 16GB with weights at ~14.5GB
+    command: [
+      "mistralai/Voxtral-Mini-4B-Realtime-2602",
+      "--dtype", "bfloat16",
+      "--tokenizer-mode", "mistral",
+      "--config-format", "mistral",
+      "--load-format", "mistral",
+      "--max-model-len", "4096",
+      "--gpu-memory-utilization", "0.98",
+      "--enforce-eager",
+      "--host", "0.0.0.0",
+      "--port", "8000"
+    ]
+
     environment:
-      # HuggingFace credentials (required to download Mistral gated model)
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN}
       - HF_TOKEN=${HF_TOKEN}
       - HF_HOME=/models/huggingface
       - TRANSFORMERS_CACHE=/models/huggingface
-
-      # vLLM compile tuning
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       - VLLM_DISABLE_COMPILE_CACHE=1
       - CUDA_VISIBLE_DEVICES=0
 
-      # Optional: set to 1 to skip CUDA graph capture (slower but less VRAM)
-      # - VLLM_USE_V1=0
-
     volumes:
-      # Persist downloaded model weights across container restarts
       - voxtral-models:/models
 
     ports:
-      # Expose vLLM directly (useful for debugging; remove in production)
       - "8000:8000"
 
     networks:
@@ -63,15 +55,13 @@ services:
 
     restart: unless-stopped
 
-    # vLLM model loading takes 2-5 minutes on first run; health check is lenient
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
-      timeout: 10s
-      start_period: 300s    # 5 min grace for model download + load
-      retries: 5
+      timeout: 15s
+      start_period: 900s
+      retries: 3
 
-    # Increase shared memory for CUDA IPC
     shm_size: "4gb"
 
     ulimits:
@@ -89,7 +79,6 @@ services:
         max-file: "3"
 
 
-  # ── FastAPI Gateway ────────────────────────────────────────────────────────
   voxtral-gateway:
     build:
       context: .
@@ -110,7 +99,7 @@ services:
 
     depends_on:
       voxtral-server:
-        condition: service_healthy
+        condition: service_started
 
     restart: unless-stopped
 
@@ -128,16 +117,9 @@ services:
         max-file: "3"
 
 
-# ── Shared Resources ──────────────────────────────────────────────────────────
-
 volumes:
   voxtral-models:
     driver: local
-    # Optional: bind-mount to a specific path on the host for easy access
-    # driver_opts:
-    #   type: none
-    #   o: bind
-    #   device: /mnt/nvme/voxtral-models
 
 networks:
   voxtral-net:
